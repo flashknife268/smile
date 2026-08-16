@@ -282,10 +282,10 @@ export function loadProjectProps(project: DiscoveredProject): ProjectProperties 
     if (!props.general.targetFileName) {
       props.general.targetFileName = project.name;
     }
-    // 新建 CMake 工程：默认输出目录用 build-smile，与常见 CMake 构建树一致
+    // 新建 CMake 工程：默认输出目录用 build
     if (!fromJson) {
-      props.general.outputDirectory = "build-smile\\";
-      props.general.intermediateDirectory = "build-smile\\";
+      props.general.outputDirectory = "build\\";
+      props.general.intermediateDirectory = "build\\";
     }
   }
   return props;

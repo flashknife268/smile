@@ -1,9 +1,13 @@
 ﻿import * as vscode from "vscode";
 import { SmileSidebarProvider } from "./sidebarProvider";
-import { initStore } from "./store";
+import { initStore, loadVisualEffect, loadVisualEffectOpacity } from "./store";
+import { applyVisualEffect, cleanupVisualEffects, initVisualEffects, restoreLegacyEffectColorEdits } from "./visualEffects";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await initStore(context);
+  initVisualEffects(context.globalState, context.extensionPath);
+  await restoreLegacyEffectColorEdits(context.globalState);
+  void applyVisualEffect(loadVisualEffect(), { reload: false, opacity: loadVisualEffectOpacity() });
 
   const provider = new SmileSidebarProvider(context.extensionUri);
 
@@ -35,6 +39,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 }
 
-export function deactivate(): void {
-  // no-op
+export function deactivate(): Thenable<void> {
+  return cleanupVisualEffects().then(() => undefined);
 }

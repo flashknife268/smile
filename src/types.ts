@@ -67,6 +67,21 @@ export interface CppColorItem {
   italic?: boolean;
 }
 
+export type VisualEffectId = "none" | "acrylic";
+
+export type VisualEffectOpacityMap = {
+  acrylic: number;
+};
+
+export const VISUAL_EFFECT_DEFS: { id: VisualEffectId; label: string }[] = [
+  { id: "none", label: "无" },
+  { id: "acrylic", label: "亚克力" },
+];
+
+export const DEFAULT_VISUAL_EFFECT_OPACITY: VisualEffectOpacityMap = {
+  acrylic: 70,
+};
+
 export const DEFAULT_CONFIGURATIONS: BuildConfiguration[] = [
   { name: "Debug", platform: "x64" },
   { name: "Release", platform: "x64" },

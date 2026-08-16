@@ -974,10 +974,10 @@ export function syncVsCodeBuildFromProject(
     targetFile: "",
   };
 
-  // 默认：CMake 用 build-smile；其余用工程目录。最终都以「输出目录」设置为准。
+  // 默认：CMake 用 build；其余用工程目录。最终都以「输出目录」设置为准。
   const defaultOut =
     project.kind === "cmake"
-      ? path.join(projectDir, "build-smile") + path.sep
+      ? path.join(projectDir, "build") + path.sep
       : projectDir + path.sep;
   const outDirRaw = expandMacros(props.general.outputDirectory || defaultOut, {
     ...macroCtxBase,

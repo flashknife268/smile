@@ -9,9 +9,14 @@ import {
   applyKeybindingsToVscode,
   loadCppColors,
   loadKeybindings,
+  loadVisualEffect,
+  loadVisualEffectOpacity,
   saveCppColors,
   saveKeybindings,
+  saveVisualEffect,
+  saveVisualEffectOpacity,
 } from "./store";
+import { applyVisualEffect } from "./visualEffects";
 import {
   detectCompilers,
   filterCompilers,
@@ -25,6 +30,10 @@ import {
   DEFAULT_PROJECT,
   KEYBINDING_DEFS,
   ProjectProperties,
+  DEFAULT_VISUAL_EFFECT_OPACITY,
+  VISUAL_EFFECT_DEFS,
+  VisualEffectId,
+  VisualEffectOpacityMap,
 } from "./types";
 
 export class SmileSidebarProvider implements vscode.WebviewViewProvider {
@@ -82,12 +91,22 @@ export class SmileSidebarProvider implements vscode.WebviewViewProvider {
             break;
           }
           case "saveColors": {
-            const colors = message.payload as typeof CPP_COLOR_DEFS;
+            const payload = message.payload as {
+              colors: typeof CPP_COLOR_DEFS;
+              visualEffect?: VisualEffectId;
+              opacities?: VisualEffectOpacityMap;
+            };
+            const colors = payload.colors;
+            const effect = payload.visualEffect ?? "none";
+            const opacities = payload.opacities ?? loadVisualEffectOpacity();
             await saveCppColors(colors);
             await applyCppColorsToVscode(colors);
-            vscode.window.showInformationMessage(
-              "C++ 颜色已写入当前主题配置，并清理了重复的 Smile 规则"
-            );
+            await saveVisualEffect(effect);
+            await saveVisualEffectOpacity(opacities);
+            await applyVisualEffect(effect, { reload: true, opacity: opacities });
+            if (effect === "none") {
+              vscode.window.showInformationMessage("C++ 颜色已写入当前主题配置");
+            }
             await this.postState();
             break;
           }
@@ -208,6 +227,9 @@ export class SmileSidebarProvider implements vscode.WebviewViewProvider {
       keybindings: loadKeybindings(),
       keybindingDefs: KEYBINDING_DEFS,
       colors: loadCppColors(),
+      visualEffect: loadVisualEffect(),
+      visualEffectOpacity: loadVisualEffectOpacity(),
+      visualEffects: VISUAL_EFFECT_DEFS,
       compilers: getCachedCompilers(),
       compilerNames: [...COMPILER_NAMES],
       hasWorkspace: Boolean(vscode.workspace.workspaceFolders?.length),
@@ -354,9 +376,9 @@ input[type="color"] { padding: 2px; height: 28px; max-width: 42px; }
 }
 .cselect-btn:focus { outline: 1px solid var(--blue-bright); }
 .cselect-menu {
-  display: none; position: absolute; z-index: 50; left: 0; right: 0; top: calc(100% + 2px);
+  display: none; position: fixed; z-index: 1000;
   max-height: 180px; overflow: auto;
-  background: var(--dropdown-list-bg); color: var(--dropdown-fg);
+  background: var(--vscode-editorWidget-background, #252526); color: var(--dropdown-fg);
   border: 1px solid var(--dropdown-border); border-radius: 3px;
   box-shadow: 0 8px 20px rgba(0,0,0,.45);
 }
@@ -408,20 +430,46 @@ input[type="color"] { padding: 2px; height: 28px; max-width: 42px; }
   border-color: var(--amber); color: var(--amber);
   box-shadow: 0 0 0 1px var(--amber);
 }
-.color-list { display: flex; flex-direction: column; gap: 10px; }
+.color-list { display: flex; flex-direction: column; gap: 8px; }
 .color-group {
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: 5px;
   background: color-mix(in srgb, var(--bg) 92%, #000 8%);
   overflow: hidden;
 }
-.color-cat {
+.color-group > summary.color-cat {
   margin: 0; padding: 7px 10px;
   font-weight: 650; font-size: 11px; color: var(--muted);
   background: color-mix(in srgb, var(--bg) 70%, #000 30%);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom: 1px solid transparent;
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
+}
+.color-group > summary.color-cat::-webkit-details-marker { display: none; }
+.color-group > summary.color-cat::before {
+  content: ""; width: 5px; height: 5px; flex: 0 0 5px;
+  border-right: 1.5px solid color-mix(in srgb, var(--fg) 55%, transparent);
+  border-bottom: 1.5px solid color-mix(in srgb, var(--fg) 55%, transparent);
+  transform: rotate(-45deg); margin: 0 2px 0 1px;
+}
+.color-group[open] > summary.color-cat::before {
+  transform: rotate(45deg); margin-top: -2px;
+}
+.color-group[open] > summary.color-cat {
+  border-bottom-color: color-mix(in srgb, var(--border) 60%, transparent);
 }
 .color-group-body { padding: 8px 10px 4px; }
+.effect-options { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+.effect-row {
+  display: grid; grid-template-columns: 16px 64px minmax(70px, 1fr) 36px;
+  gap: 6px; align-items: center;
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 3px;
+}
+.effect-row:hover { border-color: var(--blue-bright); }
+.effect-row label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--fg); }
+.effect-row input[type="radio"] { margin: 0; }
+.effect-row input[type="range"] { width: 100%; accent-color: var(--blue-bright); }
+.effect-row .pct { color: var(--muted); font-size: 10px; text-align: right; }
+.effect-row.none-row { grid-template-columns: 16px 1fr; }
 .color-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto 40px 72px; gap: 6px;
   align-items: center; margin-bottom: 8px;
@@ -495,6 +543,9 @@ input[type="color"] { padding: 2px; height: 28px; max-width: 42px; }
 
     <section class="page" id="page-colors">
       <div class="panel">
+        <h2 class="group-title">视觉效果</h2>
+        <p class="hint">对齐 Notepads 的深色 Host Backdrop：窗口亚克力上叠黑色着色。菜单比主界面略不透明。选「无」或卸载会恢复原配色和菜单。重新应用后须重启应用。</p>
+        <div class="effect-options" id="effect-options"></div>
         <h2 class="group-title">C++ 颜色</h2>
         <p class="hint">全局着色。保存后写入当前主题配置。</p>
         <div id="color-list"></div>
@@ -534,10 +585,14 @@ let state = {
   keybindings: {},
   keybindingDefs: [],
   colors: [],
+  visualEffect: 'none',
+  visualEffectOpacity: ${JSON.stringify(DEFAULT_VISUAL_EFFECT_OPACITY)},
   compilers: [],
   compilerNames: ${JSON.stringify([...COMPILER_NAMES])},
+  visualEffects: ${JSON.stringify(VISUAL_EFFECT_DEFS)},
   hasWorkspace: false
 };
+let openColorCats = new Set(['常规']);
 let draftConfigs = [];
 let cfgTargetId = null;
 let openProjectId = null;
@@ -600,6 +655,15 @@ function mountSelect(el, options, value, onChange) {
     const willOpen = !el.classList.contains('open');
     closeAllSelects(el);
     el.classList.toggle('open', willOpen);
+    if (willOpen) {
+      const r = btn.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.left = r.left + 'px';
+      menu.style.top = (r.bottom + 2) + 'px';
+      menu.style.width = r.width + 'px';
+      menu.style.right = 'auto';
+      menu.style.zIndex = '1000';
+    }
   });
   el.appendChild(btn);
   el.appendChild(menu);
@@ -631,7 +695,7 @@ function editorHtml(id) {
     <div class="sheet">
       <div class="section" data-sec="compiler">
         <h2 class="group-title">编译器</h2>
-        <p class="hint">MSVC / MinGW64。CMake 工程的构建目录取自「常规 → 输出目录」（默认 build-smile）。</p>
+        <p class="hint">MSVC / MinGW64。CMake 工程的构建目录取自「常规 → 输出目录」（默认 build）。</p>
         <div class="field"><label>编译器</label>
           <div class="cselect" data-field="compiler.name" data-options='${JSON.stringify([...COMPILER_NAMES])}'></div>
         </div>
@@ -1007,6 +1071,59 @@ function colorTooltip(c) {
   return parts.filter(Boolean).join(', ');
 }
 
+function renderEffects() {
+  const root = $('effect-options');
+  if (!root) return;
+  root.innerHTML = '';
+  const current = state.visualEffect || 'none';
+  const opacity = state.visualEffectOpacity || {};
+  for (const item of state.visualEffects || []) {
+    const row = document.createElement('div');
+    row.className = 'effect-row' + (item.id === 'none' ? ' none-row' : '');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'visual-effect';
+    radio.value = item.id;
+    radio.checked = item.id === current;
+    const name = document.createElement('label');
+    name.textContent = item.label;
+    name.addEventListener('click', () => { radio.checked = true; });
+    row.appendChild(radio);
+    row.appendChild(name);
+    if (item.id !== 'none') {
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.min = '0';
+      range.max = '100';
+      range.setAttribute('data-effect-opacity', item.id);
+      range.value = String(opacity[item.id] ?? ${DEFAULT_VISUAL_EFFECT_OPACITY.acrylic});
+      const pct = document.createElement('span');
+      pct.className = 'pct';
+      pct.textContent = range.value + '%';
+      range.addEventListener('input', () => {
+        pct.textContent = range.value + '%';
+        radio.checked = true;
+      });
+      row.appendChild(range);
+      row.appendChild(pct);
+    }
+    root.appendChild(row);
+  }
+}
+
+function collectVisualEffect() {
+  const el = document.querySelector('input[name="visual-effect"]:checked');
+  return el ? el.value : (state.visualEffect || 'none');
+}
+
+function collectVisualEffectOpacity() {
+  const map = Object.assign({}, state.visualEffectOpacity || {});
+  document.querySelectorAll('[data-effect-opacity]').forEach(el => {
+    map[el.getAttribute('data-effect-opacity')] = Number(el.value);
+  });
+  return map;
+}
+
 function renderColors() {
   const root = $('color-list');
   root.className = 'color-list';
@@ -1016,9 +1133,15 @@ function renderColors() {
   for (const c of state.colors) {
     if (c.category !== lastCat) {
       lastCat = c.category;
-      const group = document.createElement('section');
+      const cat = lastCat;
+      const group = document.createElement('details');
       group.className = 'color-group';
-      const h = document.createElement('div');
+      group.open = openColorCats.has(cat);
+      group.addEventListener('toggle', () => {
+        if (group.open) openColorCats.add(cat);
+        else openColorCats.delete(cat);
+      });
+      const h = document.createElement('summary');
       h.className = 'color-cat';
       h.textContent = lastCat;
       body = document.createElement('div');
@@ -1103,6 +1226,7 @@ function render() {
   $('warn').classList.toggle('hidden', state.hasWorkspace);
   renderProjects();
   renderKeybindings();
+  renderEffects();
   renderColors();
 }
 
@@ -1111,7 +1235,14 @@ $('save-keyboard').addEventListener('click', () => {
 });
 $('reset-keyboard').addEventListener('click', () => vscode.postMessage({ type: 'resetKeybindings' }));
 $('save-colors').addEventListener('click', () => {
-  vscode.postMessage({ type: 'saveColors', payload: collectColors() });
+  vscode.postMessage({
+    type: 'saveColors',
+    payload: {
+      colors: collectColors(),
+      visualEffect: collectVisualEffect(),
+      opacities: collectVisualEffectOpacity()
+    }
+  });
 });
 $('reset-colors').addEventListener('click', () => vscode.postMessage({ type: 'resetColors' }));
 
@@ -1144,7 +1275,10 @@ document.addEventListener('click', () => closeAllSelects());
 window.addEventListener('message', (event) => {
   const msg = event.data;
   if (msg.type === 'state') {
+    const effects = state.visualEffects;
     state = msg;
+    if (!state.visualEffects) state.visualEffects = effects;
+    if (!state.visualEffectOpacity) state.visualEffectOpacity = ${JSON.stringify(DEFAULT_VISUAL_EFFECT_OPACITY)};
     if (!openProjectId && state.projects && state.projects[0]) openProjectId = state.projects[0].id;
     render();
   } else if (msg.type === 'pathPicked') {

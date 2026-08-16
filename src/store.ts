@@ -11,6 +11,9 @@ import {
   DEFAULT_PROJECT,
   ProjectProperties,
   SMILE_SYNC_VERSION,
+  VisualEffectId,
+  VisualEffectOpacityMap,
+  DEFAULT_VISUAL_EFFECT_OPACITY,
 } from "./types";
 
 const PROJECT_FILE = ".vscode/.smile/project.json";
@@ -18,6 +21,8 @@ const LEGACY_PROJECT_FILE = ".smile/project.json";
 const GLOBAL_KEYS = {
   keybindings: "smile.keybindings",
   colors: "smile.cppColors",
+  visualEffect: "smile.visualEffect",
+  visualEffectOpacity: "smile.visualEffectOpacity",
   syncVersion: "smile.syncVersion",
 };
 const LEGACY_GLOBAL_KEYS = {
@@ -161,6 +166,48 @@ export async function saveCppColors(colors: CppColorItem[]): Promise<void> {
     map[c.id] = { color: c.color, bold: c.bold, italic: c.italic };
   }
   await globalState.update(GLOBAL_KEYS.colors, map);
+}
+
+export function loadVisualEffect(): VisualEffectId {
+  const saved = globalState?.get<string>(GLOBAL_KEYS.visualEffect);
+  if (saved === "acrylic" || saved === "none") {
+    return saved;
+  }
+  if (saved === "glass") {
+    return "acrylic";
+  }
+  return "none";
+}
+
+export async function saveVisualEffect(effect: VisualEffectId): Promise<void> {
+  if (!globalState) {
+    throw new Error("扩展尚未初始化");
+  }
+  await globalState.update(GLOBAL_KEYS.visualEffect, effect);
+}
+
+function clampOpacity(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+export function loadVisualEffectOpacity(): VisualEffectOpacityMap {
+  const saved = globalState?.get<Partial<VisualEffectOpacityMap>>(GLOBAL_KEYS.visualEffectOpacity) ?? {};
+  return {
+    acrylic: clampOpacity(saved.acrylic, DEFAULT_VISUAL_EFFECT_OPACITY.acrylic),
+  };
+}
+
+export async function saveVisualEffectOpacity(map: VisualEffectOpacityMap): Promise<void> {
+  if (!globalState) {
+    throw new Error("扩展尚未初始化");
+  }
+  await globalState.update(GLOBAL_KEYS.visualEffectOpacity, {
+    acrylic: clampOpacity(map.acrylic, DEFAULT_VISUAL_EFFECT_OPACITY.acrylic),
+  });
 }
 
 function fontStyleOf(c: CppColorItem): string | undefined {
@@ -340,4 +387,38 @@ export async function applyCppColorsToVscode(colors: CppColorItem[]): Promise<vo
     .getConfiguration("C_Cpp")
     .update("enhancedColorization", "Enabled", vscode.ConfigurationTarget.Global)
     .then(undefined, () => undefined);
+
+  if (loadVisualEffect() === "none") {
+    await applyDarkModernEditorBackground();
+  }
+}
+
+const DARK_MODERN_CHROME = "#181818";
+const DARK_MODERN_EDITOR_KEYS = [
+  "editor.background",
+  "editorPane.background",
+  "editorGutter.background",
+  "editorStickyScroll.background",
+  "editorStickyScrollGutter.background",
+] as const;
+
+export async function applyDarkModernEditorBackground(): Promise<void> {
+  const theme = vscode.workspace.getConfiguration("workbench").get<string>("colorTheme") ?? "";
+  if (!/dark modern/i.test(theme)) {
+    return;
+  }
+  const inspect = vscode.workspace
+    .getConfiguration("workbench")
+    .inspect<Record<string, unknown>>("colorCustomizations");
+  const global = clone(inspect?.globalValue ?? {}) as Record<string, unknown>;
+  const bucketKey = `[${theme}]`;
+  const bucket = clone((global[bucketKey] as Record<string, unknown>) ?? {});
+  for (const key of DARK_MODERN_EDITOR_KEYS) {
+    global[key] = DARK_MODERN_CHROME;
+    bucket[key] = DARK_MODERN_CHROME;
+  }
+  global[bucketKey] = bucket;
+  await vscode.workspace
+    .getConfiguration("workbench")
+    .update("colorCustomizations", global, vscode.ConfigurationTarget.Global);
 }
