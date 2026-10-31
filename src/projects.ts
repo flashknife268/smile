@@ -76,11 +76,11 @@ function normalizeConfigType(value?: string): ConfigType {
 }
 
 function normalizeStandard(value?: string): LanguageStandard {
-  if (value === "C++20") {
-    return "C++20";
+  if (value === "C++14" || value === "C++17" || value === "C++20") {
+    return value;
   }
   if (value === "C++23" || value === "最新") {
-    return "C++23";
+    return "C++20";
   }
   return "C++17";
 }

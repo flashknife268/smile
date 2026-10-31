@@ -10,6 +10,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void applyVisualEffect(loadVisualEffect(), { reload: false, opacity: loadVisualEffectOpacity() });
 
   const provider = new SmileSidebarProvider(context.extensionUri);
+  provider.startTrackingSidebar(context.storageUri);
+  context.subscriptions.push({ dispose: () => provider.stopTrackingSidebar() });
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(SmileSidebarProvider.viewType, provider, {

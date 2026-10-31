@@ -1,18 +1,6 @@
 # Smile
 
-## 界面
-
-项目：选择编译器、语言标准和构建目标
-
-![项目](ScreenShot1.png)
-
-键盘：查看并修改快捷键
-
-![键盘](ScreenShot2.png)
-
-颜色：设置视觉效果和 C++ 语法颜色
-
-![颜色](ScreenShot3.png)
+![Smile](ScreenShot.png)
 
 面向 VS Code 的 C/C++ 扩展：用 GCC 或 Clang 配置工具链、构建和调试，并设置字体、语法颜色和快捷键。
 

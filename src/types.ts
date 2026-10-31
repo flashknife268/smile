@@ -1,5 +1,5 @@
 export type ConfigType = "可执行文件" | "动态库" | "静态库";
-export type LanguageStandard = "C++17" | "C++20" | "C++23";
+export type LanguageStandard = "C++14" | "C++17" | "C++20";
 export type BuildType = "Debug" | "Release";
 export type CompilerName = "GCC" | "Clang";
 

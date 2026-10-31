@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import {
   loadAllProjectStates,
@@ -34,23 +36,157 @@ import {
   VisualEffectOpacityMap,
 } from "./types";
 
+const VIEWLET_KEY = "workbench.sidebar.activeviewletid";
+const SIDEBAR_HIDDEN_KEY = "workbench.sidebar.hidden";
+
+interface SidebarSnapshot {
+  viewlet?: string;
+  hidden?: boolean;
+}
+
+function sidebarStateFiles(storageUri: vscode.Uri | undefined): string[] {
+  if (!storageUri) {
+    return [];
+  }
+  const dir = path.dirname(storageUri.fsPath);
+  return [path.join(dir, "state.vscdb-wal"), path.join(dir, "state.vscdb")];
+}
+
+function textAfter(buf: Buffer, at: number): string | undefined {
+  let end = at;
+  const limit = Math.min(buf.length, at + 80);
+  while (end < limit) {
+    const c = buf[end];
+    const ok =
+      (c >= 48 && c <= 57) ||
+      (c >= 65 && c <= 90) ||
+      (c >= 97 && c <= 122) ||
+      c === 45 ||
+      c === 46 ||
+      c === 95;
+    if (!ok) {
+      break;
+    }
+    end++;
+  }
+  if (end === at) {
+    return undefined;
+  }
+  return buf.subarray(at, end).toString("utf8");
+}
+
+function readSnapshotFromFile(file: string): SidebarSnapshot | undefined {
+  let buf: Buffer;
+  try {
+    buf = fs.readFileSync(file);
+  } catch {
+    return undefined;
+  }
+  const viewletKey = Buffer.from(VIEWLET_KEY);
+  const hiddenKey = Buffer.from(SIDEBAR_HIDDEN_KEY);
+  let viewlet: string | undefined;
+  let hidden: boolean | undefined;
+  let from = 0;
+  while (from < buf.length) {
+    const idx = buf.indexOf(viewletKey, from);
+    if (idx < 0) {
+      break;
+    }
+    const token = textAfter(buf, idx + viewletKey.length);
+    if (token && token.length >= 3) {
+      viewlet = token;
+    }
+    from = idx + viewletKey.length;
+  }
+  from = 0;
+  while (from < buf.length) {
+    const idx = buf.indexOf(hiddenKey, from);
+    if (idx < 0) {
+      break;
+    }
+    const token = textAfter(buf, idx + hiddenKey.length);
+    if (token === "true" || token === "false") {
+      hidden = token === "true";
+    }
+    from = idx + hiddenKey.length;
+  }
+  if (!viewlet && hidden === undefined) {
+    return undefined;
+  }
+  return { viewlet, hidden };
+}
+
+const snapshotCache = new Map<string, { mtime: number; snap?: SidebarSnapshot }>();
+
+function readSidebarSnapshot(storageUri: vscode.Uri | undefined): SidebarSnapshot | undefined {
+  let best: { mtime: number; snap: SidebarSnapshot } | undefined;
+  for (const file of sidebarStateFiles(storageUri)) {
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(file).mtimeMs;
+    } catch {
+      continue;
+    }
+    const cached = snapshotCache.get(file);
+    const snap = cached && cached.mtime === mtime ? cached.snap : readSnapshotFromFile(file);
+    if (!cached || cached.mtime !== mtime) {
+      snapshotCache.set(file, { mtime, snap });
+    }
+    if (!snap) {
+      continue;
+    }
+    if (!best || mtime >= best.mtime) {
+      best = { mtime, snap };
+    }
+  }
+  return best?.snap;
+}
+
 export class SmileSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "smile-cpp.sidebar";
   public static readonly panelType = "smile-cpp.panel";
   private panel?: vscode.WebviewPanel;
+  private sidebarView?: vscode.WebviewView;
   private pendingTab?: string;
   private opening = false;
   private projects: ProjectStateItem[] = [];
+  private storageUri?: vscode.Uri;
+  private previousViewlet?: string;
+  private sidebarWasHidden = false;
+  private viewletTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly extensionUri: vscode.Uri) {}
+
+  startTrackingSidebar(storageUri: vscode.Uri | undefined): void {
+    this.storageUri = storageUri;
+    this.captureViewlet();
+    const tick = () => {
+      this.captureViewlet();
+      this.viewletTimer = setTimeout(tick, 800);
+    };
+    this.viewletTimer = setTimeout(tick, 800);
+  }
+
+  stopTrackingSidebar(): void {
+    if (this.viewletTimer) {
+      clearTimeout(this.viewletTimer);
+      this.viewletTimer = undefined;
+    }
+  }
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ): void {
+    this.sidebarView = webviewView;
     webviewView.webview.options = { enableScripts: false };
     webviewView.webview.html = `<!DOCTYPE html><html><body style="background:var(--vscode-sideBar-background,#1a1d22)"></body></html>`;
+    webviewView.onDidDispose(() => {
+      if (this.sidebarView === webviewView) {
+        this.sidebarView = undefined;
+      }
+    });
     const openWhenShown = () => {
       if (webviewView.visible) {
         void this.openFromSidebar();
@@ -62,6 +198,34 @@ export class SmileSidebarProvider implements vscode.WebviewViewProvider {
 
   private ignoreSidebarOpen = false;
 
+  private captureViewlet(): void {
+    if (this.sidebarView?.visible) {
+      return;
+    }
+    const snap = readSidebarSnapshot(this.storageUri);
+    if (!snap) {
+      return;
+    }
+    if (snap.viewlet && snap.viewlet !== "smile-cpp" && !snap.viewlet.startsWith("smile-cpp.")) {
+      this.previousViewlet = snap.viewlet;
+    }
+    if (snap.hidden !== undefined) {
+      this.sidebarWasHidden = snap.hidden;
+    }
+  }
+
+  private async restorePreviousSidebar(): Promise<void> {
+    const id = this.previousViewlet;
+    if (!id) {
+      return;
+    }
+    try {
+      await vscode.commands.executeCommand(id, { preserveFocus: true });
+    } catch {
+      // 恢复不到原来的侧边栏时保持现状，不能把其他侧边栏关掉
+    }
+  }
+
   private async openFromSidebar(): Promise<void> {
     if (this.ignoreSidebarOpen) {
       return;
@@ -69,10 +233,20 @@ export class SmileSidebarProvider implements vscode.WebviewViewProvider {
     this.ignoreSidebarOpen = true;
     try {
       await this.openWindow();
+      if (this.sidebarWasHidden) {
+        try {
+          await vscode.commands.executeCommand("workbench.action.closeSidebar");
+        } catch {
+          // 侧边栏本来就是收起的
+        }
+      } else {
+        await this.restorePreviousSidebar();
+      }
+      this.panel?.reveal(undefined, false);
     } finally {
       setTimeout(() => {
         this.ignoreSidebarOpen = false;
-      }, 400);
+      }, 500);
     }
   }
 
@@ -806,7 +980,7 @@ function editorHtml(id, kind) {
           <button class="btn ghost" data-pick-folder="\${pid(id,'compiler.path')}">目录</button>
         </div></div>
         <div class="field"><label>语言标准</label>
-          <div class="cselect" data-field="general.languageStandard" data-options='["C++17","C++20","C++23"]'></div>
+          <div class="cselect" data-field="general.languageStandard" data-options='["C++14","C++17","C++20"]'></div>
         </div>
         <div class="field"><label>构建类型</label>
           <div class="cselect" data-field="configuration.config" data-options='["Debug","Release"]'></div>
@@ -946,7 +1120,7 @@ function collectEditor(root, baseProps) {
   if (!['可执行文件','动态库','静态库'].includes(project.general.configurationType)) {
     project.general.configurationType = '可执行文件';
   }
-  if (!['C++17','C++20','C++23'].includes(project.general.languageStandard)) {
+  if (!['C++14','C++17','C++20'].includes(project.general.languageStandard)) {
     project.general.languageStandard = 'C++17';
   }
   return project;

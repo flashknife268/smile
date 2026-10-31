@@ -54,10 +54,10 @@ function splitList(value: string): string[] {
 
 function toStdFlag(lang: LanguageStandard): string {
   switch (lang) {
+    case "C++14":
+      return "-std=c++14";
     case "C++20":
       return "-std=c++20";
-    case "C++23":
-      return "-std=c++23";
     default:
       return "-std=c++17";
   }

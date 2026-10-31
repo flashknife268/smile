@@ -21,6 +21,7 @@
     "Other"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:smile-cpp.sidebar",
     "onCommand:smile-cpp.openPanel",
     "onWebviewPanel:smile-cpp.panel"
