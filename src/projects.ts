@@ -1,4 +1,4 @@
-﻿import * as fs from "fs";
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
@@ -9,17 +9,23 @@ import {
   smileProjectsDir,
   smileRoot,
 } from "./paths";
-import { COMPILER_NAMES, DEFAULT_PROJECT, ProjectProperties } from "./types";
-import { readVcxproj, writeVcxproj } from "./vcxproj";
+import {
+  BuildType,
+  CompilerName,
+  ConfigType,
+  DEFAULT_PROJECT,
+  LanguageStandard,
+  ProjectProperties,
+} from "./types";
 import { syncVsCodeBuildFromProject } from "./vscodeBuildSync";
 
-export type ProjectKind = "vcxproj" | "cmake" | "smile";
+export type ProjectKind = "cmake" | "smile";
 
 export interface DiscoveredProject {
   id: string;
   name: string;
   kind: ProjectKind;
-  /** Absolute path to .vcxproj, CMakeLists.txt dir, or logical folder */
+  /** Absolute path to the CMake project directory, or the Smile property file */
   path: string;
   relativePath: string;
   sourceLabel: string;
@@ -42,15 +48,97 @@ function smileJsonPath(root: string, id: string): string {
   return smileProjectJson(root, id);
 }
 
-function normalizeCompilerName(name?: string): string {
-  const n = (name || "").toLowerCase();
-  if (n.includes("mingw") || n.includes("gcc") || n.includes("g++")) {
-    return "MinGW64";
+function isMsvcPath(value?: string): boolean {
+  return /msbuild|cl\.exe|visual studio|vcvars/i.test(value || "");
+}
+
+function normalizeCompilerName(name?: string, compilerPath?: string): CompilerName {
+  const n = `${name || ""} ${compilerPath || ""}`.toLowerCase();
+  if (n.includes("clang")) {
+    return "Clang";
   }
-  if (COMPILER_NAMES.includes(name as (typeof COMPILER_NAMES)[number])) {
-    return name as string;
+  return "GCC";
+}
+
+function normalizeBuildType(name?: string): BuildType {
+  return /release|minsize|relwithdeb/i.test(name || "") ? "Release" : "Debug";
+}
+
+function normalizeConfigType(value?: string): ConfigType {
+  const v = value || "";
+  if (v.includes("动态") || /dll|shared/i.test(v)) {
+    return "动态库";
   }
-  return "MSVC";
+  if (v.includes("静态") || /static|\.lib|\.a\b/i.test(v)) {
+    return "静态库";
+  }
+  return "可执行文件";
+}
+
+function normalizeStandard(value?: string): LanguageStandard {
+  if (value === "C++20") {
+    return "C++20";
+  }
+  if (value === "C++23" || value === "最新") {
+    return "C++23";
+  }
+  return "C++17";
+}
+
+/** 旧的 VS 宏路径和 MSVC 默认项，读入时收成 GCC/Clang 能直接用的值。 */
+function normalizeOutputDir(dir?: string): string {
+  const d = (dir || "").trim();
+  if (!d || /\$\((SolutionDir|Platform|Configuration|OutDir)\)/i.test(d)) {
+    return "build";
+  }
+  return d.replace(/[\\/]+$/, "") || "build";
+}
+
+function normalizeDefines(value?: string): string {
+  const parts = (value || "")
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const msvcDefaults = new Set(["_DEBUG", "NDEBUG", "_CONSOLE", "UNICODE", "_UNICODE"]);
+  if (parts.length && parts.every((p) => msvcDefaults.has(p))) {
+    return "";
+  }
+  return parts.join(";");
+}
+
+function normalizeProps(raw?: Partial<ProjectProperties>): ProjectProperties {
+  const compilerPath = isMsvcPath(raw?.compiler?.path) ? "" : raw?.compiler?.path || "";
+  const target = (raw?.general?.targetFileName || "").trim();
+  const command = (raw?.debug?.command || "").trim();
+  const cwd = (raw?.debug?.workingDirectory || "").trim();
+  return {
+    compiler: {
+      name: normalizeCompilerName(raw?.compiler?.name, compilerPath),
+      path: compilerPath,
+    },
+    configuration: {
+      config: normalizeBuildType(raw?.configuration?.config),
+      platform: "x64",
+      configurations: structuredClone(DEFAULT_PROJECT.configuration.configurations),
+    },
+    general: {
+      outputDirectory: normalizeOutputDir(raw?.general?.outputDirectory),
+      targetFileName: /^\$\(ProjectName\)$/i.test(target) ? "" : target,
+      configurationType: normalizeConfigType(raw?.general?.configurationType),
+      languageStandard: normalizeStandard(raw?.general?.languageStandard),
+    },
+    debug: {
+      command: !command || /^\$\(TargetPath\)$/i.test(command) ? "" : command,
+      commandArguments: raw?.debug?.commandArguments || "",
+      workingDirectory: !cwd || /^\$\(ProjectDir\)$/i.test(cwd) ? "" : cwd,
+    },
+    cpp: {
+      additionalIncludeDirectories: raw?.cpp?.additionalIncludeDirectories || "",
+      additionalLibraryDirectories: raw?.cpp?.additionalLibraryDirectories || "",
+      additionalDependencies: raw?.cpp?.additionalDependencies || "",
+      preprocessorDefinitions: normalizeDefines(raw?.cpp?.preprocessorDefinitions),
+    },
+  };
 }
 
 function readJsonProps(filePath: string): ProjectProperties | undefined {
@@ -59,25 +147,7 @@ function readJsonProps(filePath: string): ProjectProperties | undefined {
       return undefined;
     }
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<ProjectProperties>;
-    return {
-      compiler: {
-        ...DEFAULT_PROJECT.compiler,
-        ...raw.compiler,
-        name: normalizeCompilerName(raw.compiler?.name ?? DEFAULT_PROJECT.compiler.name),
-      },
-      configuration: {
-        ...DEFAULT_PROJECT.configuration,
-        ...raw.configuration,
-        configurations:
-          raw.configuration?.configurations?.length
-            ? raw.configuration.configurations
-            : structuredClone(DEFAULT_PROJECT.configuration.configurations),
-      },
-      general: { ...DEFAULT_PROJECT.general, ...raw.general },
-      advanced: { ...DEFAULT_PROJECT.advanced, ...raw.advanced },
-      debug: { ...DEFAULT_PROJECT.debug, ...raw.debug },
-      cpp: { ...DEFAULT_PROJECT.cpp, ...raw.cpp },
-    };
+    return normalizeProps(raw);
   } catch {
     return undefined;
   }
@@ -88,45 +158,7 @@ function writeJsonProps(filePath: string, props: ProjectProperties): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const next = {
-    ...props,
-    compiler: {
-      ...props.compiler,
-      name: normalizeCompilerName(props.compiler.name),
-    },
-  };
-  fs.writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
-}
-
-function mergeProps(base: ProjectProperties, overlay?: ProjectProperties): ProjectProperties {
-  if (!overlay) {
-    return base;
-  }
-  return {
-    compiler: {
-      ...base.compiler,
-      ...overlay.compiler,
-      name: normalizeCompilerName(overlay.compiler?.name ?? base.compiler.name),
-    },
-    configuration: {
-      ...base.configuration,
-      ...overlay.configuration,
-      configurations:
-        overlay.configuration.configurations?.length
-          ? overlay.configuration.configurations
-          : base.configuration.configurations,
-    },
-    general: { ...base.general, ...overlay.general },
-    advanced: { ...base.advanced, ...overlay.advanced },
-    debug: { ...base.debug, ...overlay.debug },
-    cpp: { ...base.cpp, ...overlay.cpp },
-  };
-}
-
-async function findVcxprojs(root: string): Promise<string[]> {
-  const pattern = new vscode.RelativePattern(root, "**/*.vcxproj");
-  const uris = await vscode.workspace.findFiles(pattern, "**/node_modules/**", 100);
-  return uris.map((u) => u.fsPath).sort((a, b) => a.localeCompare(b));
+  fs.writeFileSync(filePath, JSON.stringify(normalizeProps(props), null, 2), "utf8");
 }
 
 async function findCMakeLists(root: string): Promise<string[]> {
@@ -149,23 +181,6 @@ export async function discoverProjects(): Promise<DiscoveredProject[]> {
 
   const projects: DiscoveredProject[] = [];
   const seenDirs = new Set<string>();
-
-  const vcxprojs = await findVcxprojs(root);
-  for (const file of vcxprojs) {
-    const name = path.basename(file, ".vcxproj");
-    const id = safeId(path.relative(root, file));
-    const dir = path.dirname(file).toLowerCase();
-    seenDirs.add(dir);
-    projects.push({
-      id,
-      name,
-      kind: "vcxproj",
-      path: file,
-      relativePath: path.relative(root, file),
-      sourceLabel: "Visual Studio (.vcxproj)",
-      hasExistingProps: true,
-    });
-  }
 
   const cmakeFiles = await findCMakeLists(root);
   for (const file of cmakeFiles) {
@@ -246,7 +261,7 @@ export async function discoverProjects(): Promise<DiscoveredProject[]> {
       kind: "smile",
       path: smileJsonPath(root, "workspace"),
       relativePath: path.relative(root, smileJsonPath(root, "workspace")),
-      sourceLabel: "Smile（新建）",
+      sourceLabel: "文件夹",
       hasExistingProps: false,
     });
   }
@@ -260,33 +275,13 @@ export function loadProjectProps(project: DiscoveredProject): ProjectProperties 
     return structuredClone(DEFAULT_PROJECT);
   }
 
-  if (project.kind === "vcxproj") {
-    let fromVs = structuredClone(DEFAULT_PROJECT);
-    try {
-      fromVs = readVcxproj(project.path);
-    } catch {
-      // keep defaults
-    }
-    const overlayPath = resolveExistingSmileJson(root, project.id);
-    const overlay = overlayPath ? readJsonProps(overlayPath) : undefined;
-    return mergeProps(fromVs, overlay);
-  }
-
   const jsonPath = resolveExistingSmileJson(root, project.id);
   const fromJson =
     (jsonPath ? readJsonProps(jsonPath) : undefined) ||
     (project.kind === "smile" ? readJsonProps(project.path) : undefined);
   const props = fromJson ?? structuredClone(DEFAULT_PROJECT);
-  props.compiler.name = normalizeCompilerName(props.compiler.name);
-  if (project.kind === "cmake") {
-    if (!props.general.targetFileName) {
-      props.general.targetFileName = project.name;
-    }
-    // 新建 CMake 工程：默认输出目录用 build
-    if (!fromJson) {
-      props.general.outputDirectory = "build\\";
-      props.general.intermediateDirectory = "build\\";
-    }
+  if (project.kind === "cmake" && !props.general.targetFileName) {
+    props.general.targetFileName = project.name;
   }
   return props;
 }
@@ -297,16 +292,17 @@ export function saveProjectProps(project: DiscoveredProject, props: ProjectPrope
     throw new Error("请先打开一个工作区文件夹");
   }
 
-  props.compiler.name = normalizeCompilerName(props.compiler.name);
+  const normalized = normalizeProps(props);
+  props.compiler = normalized.compiler;
+  props.configuration = normalized.configuration;
+  props.general = normalized.general;
+  props.debug = normalized.debug;
+  props.cpp = normalized.cpp;
+
   const jsonPath = smileJsonPath(root, project.id);
   writeJsonProps(jsonPath, props);
 
-  const parts: string[] = [];
-  if (project.kind === "vcxproj") {
-    writeVcxproj(project.path, props);
-    parts.push(`已写入 ${path.basename(project.path)}`);
-  }
-  parts.push(`已保存 ${path.relative(root, jsonPath)}`);
+  const parts: string[] = [`已保存 ${path.relative(root, jsonPath)}`];
 
   try {
     parts.push(syncVsCodeBuildFromProject(root, project, props));

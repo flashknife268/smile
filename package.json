@@ -1,8 +1,8 @@
 {
-  "name": "smile",
+  "name": "smile-cpp",
   "displayName": "Smile",
-  "description": "Visual Studio–style project integration: properties, keyboard shortcuts, and C++ colors",
-  "version": "1.0.0",
+  "description": "C++ projects with GCC or Clang: build, debug, shortcuts, and colors",
+  "version": "1.1.0",
   "publisher": "smile",
   "icon": "media/icon.png",
   "galleryBanner": {
@@ -21,39 +21,40 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:smile.sidebar",
-    "onCommand:smile.openPanel"
+    "onView:smile-cpp.sidebar",
+    "onCommand:smile-cpp.openPanel",
+    "onWebviewPanel:smile-cpp.panel"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "smile.openPanel",
-        "title": "Smile: Open Project Integration",
+        "command": "smile-cpp.openPanel",
+        "title": "Smile: 打开",
         "icon": {
           "light": "media/smile.svg",
           "dark": "media/smile.svg"
         }
       },
       {
-        "command": "smile.refresh",
+        "command": "smile-cpp.refresh",
         "title": "Smile: Refresh"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "smile",
+          "id": "smile-cpp",
           "title": "Smile",
           "icon": "media/smile.svg"
         }
       ]
     },
     "views": {
-      "smile": [
+      "smile-cpp": [
         {
           "type": "webview",
-          "id": "smile.sidebar",
+          "id": "smile-cpp.sidebar",
           "name": "Smile"
         }
       ]

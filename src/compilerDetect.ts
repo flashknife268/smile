@@ -1,14 +1,14 @@
-﻿import { execFileSync } from "child_process";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-export type CompilerKind = "msvc" | "mingw64" | "gcc" | "clang";
+export type CompilerKind = "gcc" | "clang";
 
 export interface DetectedCompiler {
   kind: CompilerKind;
   /** Smile UI 中的编译器名称 */
-  name: "MSVC" | "MinGW64" | "GCC" | "Clang";
+  name: "GCC" | "Clang";
   /** 写入项目属性的路径（目录或可执行文件） */
   path: string;
   /** 实际编译器可执行文件（若有） */
@@ -184,14 +184,13 @@ function detectMingwAndGcc(): DetectedCompiler[] {
       continue;
     }
     const version = readVersion(command);
-    const isMingw = /mingw|msys|ucrt64|clang64/i.test(root) || /mingw|msys/i.test(command);
     out.push({
-      kind: isMingw ? "mingw64" : "gcc",
-      name: isMingw ? "MinGW64" : "GCC",
+      kind: "gcc",
+      name: "GCC",
       path: root,
       command,
       version,
-      label: `${isMingw ? "MinGW64" : "GCC"}${version ? ` ${version}` : ""} — ${root}`,
+      label: `GCC${version ? ` ${version}` : ""} — ${root}`,
     });
   }
 
@@ -205,14 +204,13 @@ function detectMingwAndGcc(): DetectedCompiler[] {
       continue;
     }
     const version = readVersion(command);
-    const isMingw = /mingw|msys|ucrt64/i.test(command);
     out.push({
-      kind: isMingw ? "mingw64" : "gcc",
-      name: isMingw ? "MinGW64" : "GCC",
+      kind: "gcc",
+      name: "GCC",
       path: command,
       command,
       version,
-      label: `${isMingw ? "MinGW64" : "GCC"}${version ? ` ${version}` : ""} — ${command}`,
+      label: `GCC${version ? ` ${version}` : ""} — ${command}`,
     });
   }
   return out;
@@ -240,7 +238,6 @@ function detectClang(): DetectedCompiler[] {
       continue;
     }
     const version = readVersion(command);
-    const root = path.dirname(path.dirname(command));
     out.push({
       kind: "clang",
       name: "Clang",
@@ -249,127 +246,7 @@ function detectClang(): DetectedCompiler[] {
       version,
       label: `Clang${version ? ` ${version}` : ""} — ${command}`,
     });
-    void root;
   }
-  return out;
-}
-
-function detectMsvc(): DetectedCompiler[] {
-  const out: DetectedCompiler[] = [];
-  const vswhere = path.join(
-    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe"
-  );
-
-  if (existsFile(vswhere)) {
-    try {
-      const installs = execFileSync(
-        vswhere,
-        ["-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
-        { encoding: "utf8", timeout: 8000, windowsHide: true }
-      )
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      for (const install of installs) {
-        const msbuild = path.join(install, "MSBuild", "Current", "Bin", "MSBuild.exe");
-        if (!existsFile(msbuild)) {
-          continue;
-        }
-        let version: string | undefined;
-        try {
-          const ver = execFileSync(
-            vswhere,
-            ["-latest", "-property", "catalog_productDisplayVersion"],
-            { encoding: "utf8", timeout: 5000, windowsHide: true }
-          ).trim();
-          version = ver || undefined;
-        } catch {
-          version = undefined;
-        }
-        out.push({
-          kind: "msvc",
-          name: "MSVC",
-          path: msbuild,
-          command: msbuild,
-          version,
-          label: `MSVC${version ? ` ${version}` : ""} — ${msbuild}`,
-        });
-      }
-
-      const msbuilds = execFileSync(
-        vswhere,
-        ["-latest", "-requires", "Microsoft.Component.MSBuild", "-find", "MSBuild\\**\\Bin\\MSBuild.exe"],
-        { encoding: "utf8", timeout: 8000, windowsHide: true }
-      )
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter((s) => existsFile(s));
-      for (const msbuild of msbuilds) {
-        out.push({
-          kind: "msvc",
-          name: "MSVC",
-          path: msbuild,
-          command: msbuild,
-          label: `MSVC — ${msbuild}`,
-        });
-      }
-    } catch {
-      // fall through
-    }
-  }
-
-  const fallbacks = [
-    process.env.MSBUILD_PATH,
-    "E:\\software\\vs2026\\MSBuild\\Current\\Bin\\MSBuild.exe",
-    "D:\\software\\vs2026\\MSBuild\\Current\\Bin\\MSBuild.exe",
-    path.join(
-      process.env["ProgramFiles"] || "C:\\Program Files",
-      "Microsoft Visual Studio",
-      "2022",
-      "Community",
-      "MSBuild",
-      "Current",
-      "Bin",
-      "MSBuild.exe"
-    ),
-    path.join(
-      process.env["ProgramFiles"] || "C:\\Program Files",
-      "Microsoft Visual Studio",
-      "2022",
-      "Professional",
-      "MSBuild",
-      "Current",
-      "Bin",
-      "MSBuild.exe"
-    ),
-    path.join(
-      process.env["ProgramFiles"] || "C:\\Program Files",
-      "Microsoft Visual Studio",
-      "2022",
-      "Enterprise",
-      "MSBuild",
-      "Current",
-      "Bin",
-      "MSBuild.exe"
-    ),
-  ].filter(Boolean) as string[];
-
-  for (const msbuild of fallbacks) {
-    if (existsFile(msbuild)) {
-      out.push({
-        kind: "msvc",
-        name: "MSVC",
-        path: msbuild,
-        command: msbuild,
-        label: `MSVC — ${msbuild}`,
-      });
-    }
-  }
-
   return out;
 }
 
@@ -379,9 +256,8 @@ let scanning: Promise<DetectedCompiler[]> | undefined;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
 function scanCompilers(): DetectedCompiler[] {
-  // 面板仅提供 MSVC / MinGW64
-  return uniqByPath([...detectMsvc(), ...detectMingwAndGcc()]).filter(
-    (c) => c.name === "MSVC" || c.name === "MinGW64"
+  return uniqByPath([...detectMingwAndGcc(), ...detectClang()]).filter(
+    (c) => c.name === "GCC" || c.name === "Clang"
   );
 }
 
@@ -430,21 +306,3 @@ export function refreshCompilerCacheInBackground(view?: {
   });
 }
 
-export function filterCompilers(
-  all: DetectedCompiler[],
-  compilerName: string
-): DetectedCompiler[] {
-  const n = (compilerName || "").toLowerCase();
-  if (n.includes("mingw") || n.includes("gcc")) {
-    return all.filter((c) => c.name === "MinGW64" || c.kind === "mingw64" || c.kind === "gcc");
-  }
-  if (n.includes("msvc")) {
-    return all.filter((c) => c.kind === "msvc" || c.name === "MSVC");
-  }
-  return all.filter((c) => c.name === "MSVC" || c.name === "MinGW64");
-}
-
-export function preferredPathFor(compilerName: string): string | undefined {
-  return filterCompilers(getCachedCompilers().length ? getCachedCompilers() : detectCompilers(), compilerName)[0]
-    ?.path;
-}

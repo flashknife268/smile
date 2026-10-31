@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode";
+import * as vscode from "vscode";
 import { SmileSidebarProvider } from "./sidebarProvider";
 import { initStore, loadVisualEffect, loadVisualEffectOpacity } from "./store";
 import { applyVisualEffect, cleanupVisualEffects, initVisualEffects, restoreLegacyEffectColorEdits } from "./visualEffects";
@@ -18,16 +18,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("smile.openPanel", async (tab?: string) => {
-      await vscode.commands.executeCommand("smile.sidebar.focus");
-      if (typeof tab === "string") {
-        provider.focusTab(tab);
-      }
+    vscode.commands.registerCommand("smile-cpp.openPanel", async (tab?: string) => {
+      await provider.openWindow(typeof tab === "string" ? tab : undefined);
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("smile.refresh", () => {
+    vscode.window.registerWebviewPanelSerializer(SmileSidebarProvider.panelType, {
+      async deserializeWebviewPanel(panel: vscode.WebviewPanel): Promise<void> {
+        provider.attachPanel(panel, true);
+      },
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("smile-cpp.refresh", () => {
       provider.refresh();
     })
   );

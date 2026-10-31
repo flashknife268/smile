@@ -1,8 +1,7 @@
-﻿export type ConfigType = "应用程序 (.exe)" | "动态库 (.dll)" | "静态库 (.lib)" | "实用工具";
-export type CharacterSet = "Unicode" | "多字节字符集" | "未设置";
-export type MfcUsage = "使用标准 Windows 库" | "在静态库中使用 MFC" | "在共享 DLL 中使用 MFC";
-export type PrecompiledHeader = "使用" | "创建" | "不使用";
-export type LanguageStandard = "默认" | "C++14" | "C++17" | "C++20" | "C++23" | "最新";
+export type ConfigType = "可执行文件" | "动态库" | "静态库";
+export type LanguageStandard = "C++17" | "C++20" | "C++23";
+export type BuildType = "Debug" | "Release";
+export type CompilerName = "GCC" | "Clang";
 
 export interface BuildConfiguration {
   name: string;
@@ -11,25 +10,20 @@ export interface BuildConfiguration {
 
 export interface ProjectProperties {
   compiler: {
-    name: string;
+    name: CompilerName;
     path: string;
   };
   configuration: {
-    config: string;
+    config: BuildType;
     platform: string;
     configurations: BuildConfiguration[];
   };
   general: {
+    /** 构建目录。CMake 用作 -B，直接编译时产物也放这里。 */
     outputDirectory: string;
-    intermediateDirectory: string;
     targetFileName: string;
     configurationType: ConfigType;
     languageStandard: LanguageStandard;
-  };
-  advanced: {
-    targetFileExtension: string;
-    mfcUsage: MfcUsage;
-    characterSet: CharacterSet;
   };
   debug: {
     command: string;
@@ -41,8 +35,6 @@ export interface ProjectProperties {
     additionalLibraryDirectories: string;
     additionalDependencies: string;
     preprocessorDefinitions: string;
-    precompiledHeader: PrecompiledHeader;
-    precompiledHeaderFile: string;
   };
 }
 
@@ -85,15 +77,11 @@ export const DEFAULT_VISUAL_EFFECT_OPACITY: VisualEffectOpacityMap = {
 export const DEFAULT_CONFIGURATIONS: BuildConfiguration[] = [
   { name: "Debug", platform: "x64" },
   { name: "Release", platform: "x64" },
-  { name: "Debug", platform: "Win32" },
-  { name: "Release", platform: "Win32" },
 ];
-
-export const COMPILER_NAMES = ["MSVC", "MinGW64"] as const;
 
 export const DEFAULT_PROJECT: ProjectProperties = {
   compiler: {
-    name: "MSVC",
+    name: "GCC",
     path: "",
   },
   configuration: {
@@ -102,29 +90,21 @@ export const DEFAULT_PROJECT: ProjectProperties = {
     configurations: structuredClone(DEFAULT_CONFIGURATIONS),
   },
   general: {
-    outputDirectory: "$(SolutionDir)$(Platform)\\$(Configuration)\\",
-    intermediateDirectory: "$(SolutionDir)$(Platform)\\$(Configuration)\\$(Configuration)Info\\",
-    targetFileName: "$(ProjectName)",
-    configurationType: "应用程序 (.exe)",
+    outputDirectory: "build",
+    targetFileName: "",
+    configurationType: "可执行文件",
     languageStandard: "C++17",
   },
-  advanced: {
-    targetFileExtension: ".exe",
-    mfcUsage: "使用标准 Windows 库",
-    characterSet: "Unicode",
-  },
   debug: {
-    command: "$(TargetPath)",
+    command: "",
     commandArguments: "",
-    workingDirectory: "$(ProjectDir)",
+    workingDirectory: "",
   },
   cpp: {
     additionalIncludeDirectories: "",
     additionalLibraryDirectories: "",
     additionalDependencies: "",
-    preprocessorDefinitions: "_DEBUG;_CONSOLE",
-    precompiledHeader: "不使用",
-    precompiledHeaderFile: "pch.h",
+    preprocessorDefinitions: "",
   },
 };
 

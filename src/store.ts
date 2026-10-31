@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode";
+import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { writeUserKeybindings } from "./keybindingsWriter";
@@ -105,7 +105,6 @@ function mergeProject(saved: Partial<ProjectProperties>): ProjectProperties {
       configurations,
     },
     general: { ...DEFAULT_PROJECT.general, ...saved.general },
-    advanced: { ...DEFAULT_PROJECT.advanced, ...saved.advanced },
     debug: { ...DEFAULT_PROJECT.debug, ...saved.debug },
     cpp: { ...DEFAULT_PROJECT.cpp, ...saved.cpp },
   };

@@ -1,6 +1,7 @@
-﻿import { execFileSync } from "child_process";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { detectCompilers } from "./compilerDetect";
 import { legacySmileRoots, smileRoot } from "./paths";
 import type { DiscoveredProject } from "./projects";
 import type { LanguageStandard, ProjectProperties } from "./types";
@@ -53,36 +54,34 @@ function splitList(value: string): string[] {
 
 function toStdFlag(lang: LanguageStandard): string {
   switch (lang) {
-    case "C++14":
-      return "-std=c++14";
-    case "C++17":
-      return "-std=c++17";
     case "C++20":
       return "-std=c++20";
     case "C++23":
       return "-std=c++23";
-    case "最新":
-      return "-std=c++2b";
     default:
       return "-std=c++17";
   }
 }
 
-function toStdFlagMsvc(lang: LanguageStandard): string {
-  switch (lang) {
-    case "C++14":
-      return "/std:c++14";
-    case "C++17":
-      return "/std:c++17";
-    case "C++20":
-      return "/std:c++20";
-    case "C++23":
-      return "/std:c++latest";
-    case "最新":
-      return "/std:c++latest";
-    default:
-      return "/std:c++17";
+function targetKind(type: string): "exe" | "shared" | "static" {
+  if (type.includes("动态") || /dll|shared/i.test(type)) {
+    return "shared";
   }
+  if (type.includes("静态") || /static|\.lib|\.a\b/i.test(type)) {
+    return "static";
+  }
+  return "exe";
+}
+
+function targetExtension(type: string): string {
+  const kind = targetKind(type);
+  if (kind === "shared") {
+    return ".dll";
+  }
+  if (kind === "static") {
+    return ".a";
+  }
+  return ".exe";
 }
 
 function resolveExistingFile(candidates: string[]): string | undefined {
@@ -95,12 +94,6 @@ function resolveExistingFile(candidates: string[]): string | undefined {
 }
 
 function resolveCmake(): string {
-  const vswhere = path.join(
-    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe"
-  );
   const candidates: string[] = [];
   try {
     const fromWhere = execFileSync("where.exe", ["cmake"], {
@@ -115,21 +108,6 @@ function resolveCmake(): string {
   } catch {
     // ignore
   }
-  if (fs.existsSync(vswhere)) {
-    try {
-      const fromVs = execFileSync(
-        vswhere,
-        ["-latest", "-products", "*", "-find", "Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe"],
-        { encoding: "utf8", windowsHide: true, timeout: 8000 }
-      )
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      candidates.push(...fromVs);
-    } catch {
-      // ignore
-    }
-  }
   candidates.push(
     path.join(process.env["ProgramFiles"] || "C:\\Program Files", "CMake", "bin", "cmake.exe"),
     path.join(
@@ -137,249 +115,85 @@ function resolveCmake(): string {
       "CMake",
       "bin",
       "cmake.exe"
-    ),
-    "E:\\software\\cmake\\bin\\cmake.exe",
-    "D:\\software\\cmake\\bin\\cmake.exe"
+    )
   );
   return resolveExistingFile(candidates) || "cmake";
 }
 
-function resolveVsCmakeGenerator(): string {
-  const vswhere = path.join(
-    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe"
-  );
-  if (fs.existsSync(vswhere)) {
-    try {
-      const major = execFileSync(
-        vswhere,
-        ["-latest", "-products", "*", "-property", "installationVersion"],
-        { encoding: "utf8", windowsHide: true, timeout: 5000 }
-      )
-        .trim()
-        .split(".")[0];
-      if (major === "18") {
-        return "Visual Studio 18 2026";
-      }
-      if (major === "17") {
-        return "Visual Studio 17 2022";
-      }
-      if (major === "16") {
-        return "Visual Studio 16 2019";
-      }
-    } catch {
-      // fall through
-    }
-  }
-  return "Visual Studio 17 2022";
-}
-
-function resolveMsbuild(): string {
-  const vswhere = path.join(
-    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe"
-  );
-  if (fs.existsSync(vswhere)) {
-    try {
-      const out = execFileSync(
-        vswhere,
-        [
-          "-latest",
-          "-requires",
-          "Microsoft.Component.MSBuild",
-          "-find",
-          "MSBuild\\**\\Bin\\MSBuild.exe",
-        ],
-        { encoding: "utf8" }
-      )
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .find((s) => s.length > 0);
-      if (out && fs.existsSync(out)) {
-        return out;
-      }
-    } catch {
-      // fall through
-    }
-  }
-
-  const candidates = [
-    process.env.MSBUILD_PATH,
-    "E:\\software\\vs2026\\MSBuild\\Current\\Bin\\MSBuild.exe",
-    path.join(
-      process.env["ProgramFiles"] || "C:\\Program Files",
-      "Microsoft Visual Studio",
-      "2022",
-      "Community",
-      "MSBuild",
-      "Current",
-      "Bin",
-      "MSBuild.exe"
-    ),
-    path.join(
-      process.env["ProgramFiles"] || "C:\\Program Files",
-      "Microsoft Visual Studio",
-      "2022",
-      "Professional",
-      "MSBuild",
-      "Current",
-      "Bin",
-      "MSBuild.exe"
-    ),
-  ].filter(Boolean) as string[];
-
-  return resolveExistingFile(candidates) || "msbuild";
-}
-
-function resolveVsInstallPath(): string | undefined {
-  const vswhere = path.join(
-    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe"
-  );
-  if (!fs.existsSync(vswhere)) {
-    return undefined;
-  }
+function resolveNinja(): string | undefined {
   try {
-    const out = execFileSync(
-      vswhere,
-      [
-        "-latest",
-        "-products",
-        "*",
-        "-requires",
-        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "-property",
-        "installationPath",
-      ],
-      { encoding: "utf8", windowsHide: true }
-    )
+    const fromWhere = execFileSync("where.exe", ["ninja"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 4000,
+    })
       .split(/\r?\n/)
       .map((s) => s.trim())
-      .find(Boolean);
-    return out && fs.existsSync(out) ? out : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveVcvars(platform: string): string | undefined {
-  const install = resolveVsInstallPath();
-  const bat =
-    platform === "Win32" || platform === "x86"
-      ? "vcvars32.bat"
-      : "vcvars64.bat";
-  const candidates = [
-    install ? path.join(install, "VC", "Auxiliary", "Build", bat) : "",
-    `E:\\software\\vs2026\\VC\\Auxiliary\\Build\\${bat}`,
-    `D:\\software\\vs2026\\VC\\Auxiliary\\Build\\${bat}`,
-    path.join(
-      process.env["ProgramFiles"] || "C:\\Program Files",
-      "Microsoft Visual Studio",
-      "2022",
-      "Community",
-      "VC",
-      "Auxiliary",
-      "Build",
-      bat
-    ),
-  ];
-  return resolveExistingFile(candidates);
-}
-
-function resolveClExe(): string | undefined {
-  const vswhere = path.join(
-    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-    "Microsoft Visual Studio",
-    "Installer",
-    "vswhere.exe"
-  );
-  if (fs.existsSync(vswhere)) {
-    try {
-      const out = execFileSync(
-        vswhere,
-        [
-          "-latest",
-          "-products",
-          "*",
-          "-requires",
-          "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-          "-find",
-          "VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\cl.exe",
-        ],
-        { encoding: "utf8", windowsHide: true }
-      )
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .find((s) => s && fs.existsSync(s));
-      if (out) {
-        return out;
-      }
-    } catch {
-      // fall through
+      .find((s) => s && fs.existsSync(s));
+    if (fromWhere) {
+      return fromWhere;
     }
+  } catch {
+    // ignore
   }
   return undefined;
 }
 
+function isMsvcToolchainPath(value: string): boolean {
+  return /msbuild|cl\.exe|visual studio|vcvars/i.test(value);
+}
+
 function resolveCompiler(props: ProjectProperties): {
-  kind: "gcc" | "clang" | "msvc";
+  kind: "gcc" | "clang";
   command: string;
 } {
-  const name = (props.compiler.name || "").toLowerCase();
   let p = (props.compiler.path || "").trim();
+  if (isMsvcToolchainPath(p)) {
+    p = "";
+  }
 
   if (p && fs.existsSync(p) && fs.statSync(p).isDirectory()) {
-    const found = resolveExistingFile([
-      path.join(p, "bin", "g++.exe"),
-      path.join(p, "bin", "g++"),
-      path.join(p, "bin", "clang++.exe"),
-      path.join(p, "bin", "clang++"),
-      path.join(p, "g++.exe"),
-      path.join(p, "clang++.exe"),
-      path.join(p, "cl.exe"),
-    ]);
+    const preferClang = props.compiler.name === "Clang";
+    const found = resolveExistingFile(
+      preferClang
+        ? [
+            path.join(p, "bin", "clang++.exe"),
+            path.join(p, "bin", "clang++"),
+            path.join(p, "clang++.exe"),
+            path.join(p, "bin", "g++.exe"),
+            path.join(p, "bin", "g++"),
+          ]
+        : [
+            path.join(p, "bin", "g++.exe"),
+            path.join(p, "bin", "g++"),
+            path.join(p, "g++.exe"),
+            path.join(p, "bin", "clang++.exe"),
+            path.join(p, "bin", "clang++"),
+          ]
+    );
     if (found) {
       p = found;
     }
   }
 
-  if (name.includes("clang") || /clang\+\+/i.test(p)) {
-    return { kind: "clang", command: p || "clang++" };
+  if (p && fs.existsSync(p) && fs.statSync(p).isFile() && !isMsvcToolchainPath(p)) {
+    return {
+      kind: /clang/i.test(p) || props.compiler.name === "Clang" ? "clang" : "gcc",
+      command: p,
+    };
   }
-  if (
-    name.includes("gcc") ||
-    name.includes("mingw") ||
-    /g\+\+/i.test(p) ||
-    /mingw/i.test(p)
-  ) {
-    return { kind: "gcc", command: p || "g++" };
-  }
-  if (/g\+\+/i.test(p)) {
-    return { kind: "gcc", command: p };
-  }
-  if (/clang\+\+/i.test(p)) {
-    return { kind: "clang", command: p };
-  }
-  if (/cl\.exe$/i.test(p)) {
-    return { kind: "msvc", command: p };
-  }
-  // 「自定义」但路径已指向 g++/clang++
-  if (p && /\.exe$/i.test(p) && !/msbuild|cl\.exe/i.test(p)) {
-    if (/clang/i.test(p)) {
-      return { kind: "clang", command: p };
+
+  const detected = detectCompilers().find((c) => {
+    if (props.compiler.name === "Clang") {
+      return c.kind === "clang";
     }
-    if (/g\+\+|c\+\+|gcc/i.test(p)) {
-      return { kind: "gcc", command: p };
-    }
+    return c.kind === "gcc";
+  }) || detectCompilers().find((c) => c.command);
+  if (detected?.command) {
+    return { kind: detected.kind, command: detected.command };
   }
-  // MSVC：folder 工程用 cl，.vcxproj 用 msbuild（调用方区分）
-  return { kind: "msvc", command: p || resolveClExe() || resolveMsbuild() };
+
+  throw new Error("未找到 g++ 或 clang++。请安装 MinGW-w64 或 LLVM，并在工具链里指定路径。");
 }
 
 function collectFolderSources(rootDir: string): string[] {
@@ -426,39 +240,6 @@ function collectFolderSources(rootDir: string): string[] {
     return out;
   };
   return walk(rootDir);
-}
-
-function collectVcxprojSources(vcxprojPath: string): string[] {
-  try {
-    const xml = fs.readFileSync(vcxprojPath, "utf8");
-    const dir = path.dirname(vcxprojPath);
-    return [...xml.matchAll(/<ClCompile\s+Include="([^"]+)"/gi)].map((m) =>
-      path.resolve(dir, m[1])
-    );
-  } catch {
-    return [];
-  }
-}
-
-function maybeAddGladSource(
-  projectDir: string,
-  includeDirs: string[],
-  sources: string[]
-): string[] {
-  const already = sources.some((s) => /glad[/\\]gl\.c$/i.test(s) || /glad\.c$/i.test(s));
-  if (already) {
-    return sources;
-  }
-  const candidates = [
-    ...includeDirs.map((d) => path.join(d, "glad", "gl.c")),
-    path.join(projectDir, "..", "3rdParty", "glad", "gl.c"),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      return [...sources, c];
-    }
-  }
-  return sources;
 }
 
 function libNameToLinkFlag(lib: string): string | undefined {
@@ -512,47 +293,6 @@ function resolveUnder(baseDir: string, value: string): string {
     return path.normalize(normalized);
   }
   return path.resolve(baseDir, normalized);
-}
-
-/** MSBuild 目录属性：正斜杠 + 尾部 /，避免 shell 把 `\` 当转义 */
-function msbuildDirProp(name: string, dir: string): string {
-  let d = dir.replace(/\\/g, "/");
-  if (!d.endsWith("/")) {
-    d += "/";
-  }
-  return `/p:${name}=${d}`;
-}
-
-/** 是否为 Visual Studio 解决方案（含 VS2022+ 的 .slnx） */
-function hasSolutionFile(dir: string): boolean {
-  try {
-    return fs.existsSync(dir) && fs.readdirSync(dir).some((f) => /\.slnx?$/i.test(f));
-  } catch {
-    return false;
-  }
-}
-
-/** 向上查找 .sln / .slnx，使 $(SolutionDir) 与 Visual Studio 一致 */
-function resolveSolutionDir(projectDir: string, workspaceRoot: string): string {
-  let cur = projectDir;
-  for (;;) {
-    if (hasSolutionFile(cur)) {
-      return cur;
-    }
-    if (path.resolve(cur) === path.resolve(workspaceRoot)) {
-      break;
-    }
-    const parent = path.dirname(cur);
-    if (parent === cur) {
-      break;
-    }
-    cur = parent;
-  }
-  if (hasSolutionFile(workspaceRoot)) {
-    return workspaceRoot;
-  }
-  // 无解决方案时 MSBuild 将 SolutionDir 设为工程目录
-  return projectDir;
 }
 
 function writeRunScript(
@@ -651,11 +391,11 @@ function updateCodeRunnerSettings(
 function updateCppProperties(
   workspaceRoot: string,
   project: DiscoveredProject,
-  props: ProjectProperties,
   includeDirs: string[],
   defines: string[],
   compilerPath: string,
-  std: string
+  std: string,
+  compileCommands?: string
 ): void {
   const file = path.join(workspaceRoot, ".vscode", "c_cpp_properties.json");
   let current: {
@@ -672,19 +412,19 @@ function updateCppProperties(
 
   const configName = `Smile:${project.name}`;
   const configs = Array.isArray(current.configurations) ? [...current.configurations] : [];
-  const nextConfig = {
+  const nextConfig: Record<string, unknown> = {
     name: configName,
-    includePath: includeDirs,
-    defines,
     compilerPath: compilerPath || undefined,
     cStandard: "c17",
     cppStandard: std.replace("-std=", ""),
-    intelliSenseMode: /clang/i.test(compilerPath)
-      ? "windows-clang-x64"
-      : /g\+\+/i.test(compilerPath) || /gcc|mingw/i.test(props.compiler.name)
-        ? "windows-gcc-x64"
-        : "windows-msvc-x64",
+    intelliSenseMode: /clang/i.test(compilerPath) ? "windows-clang-x64" : "windows-gcc-x64",
   };
+  if (compileCommands) {
+    nextConfig.compileCommands = compileCommands;
+  } else {
+    nextConfig.includePath = includeDirs;
+    nextConfig.defines = defines;
+  }
 
   const idx = configs.findIndex((c) => c.name === configName);
   if (idx >= 0) {
@@ -702,7 +442,6 @@ function updateLaunchJson(
   props: ProjectProperties,
   program: string,
   cwd: string,
-  debuggerKind: "cppvsdbg" | "cppdbg",
   miDebuggerPath?: string
 ): void {
   const file = path.join(workspaceRoot, ".vscode", "launch.json");
@@ -720,7 +459,6 @@ function updateLaunchJson(
 
   const name = `Smile: Debug ${project.name}`;
   const configs = Array.isArray(current.configurations) ? [...current.configurations] : [];
-  // 清掉所有历史 Smile 调试项，避免切换工具链后仍运行旧的 MSVC 配置
   const filtered = configs.filter(
     (c) => typeof c.name !== "string" || !MANAGED_DEBUG_RE.test(String(c.name))
   );
@@ -734,7 +472,7 @@ function updateLaunchJson(
 
   const launch: Record<string, unknown> = {
     name,
-    type: debuggerKind,
+    type: "cppdbg",
     request: "launch",
     program,
     args: argList,
@@ -742,19 +480,16 @@ function updateLaunchJson(
     preLaunchTask: `${TASK_PREFIX}${project.name}`,
     stopAtEntry: false,
     console: "integratedTerminal",
-  };
-
-  if (debuggerKind === "cppdbg") {
-    launch.MIMode = "gdb";
-    launch.miDebuggerPath = miDebuggerPath || "gdb";
-    launch.setupCommands = [
+    MIMode: "gdb",
+    miDebuggerPath: miDebuggerPath || "gdb",
+    setupCommands: [
       {
         description: "Enable pretty-printing for gdb",
         text: "-enable-pretty-printing",
         ignoreFailures: true,
       },
-    ];
-  }
+    ],
+  };
 
   writeJson(file, { version: "0.2.0", configurations: [launch, ...filtered] });
 }
@@ -798,10 +533,7 @@ function updateTasksJson(
   const isBatch = /\.(cmd|bat)$/i.test(command);
   const buildCommand = isBatch ? "cmd.exe" : command;
   const buildArgs = isBatch ? ["/c", "call", command, ...args] : args;
-  const matcher =
-    /g\+\+|clang/i.test(command) || /g\+\+|clang/i.test(buildArgs.join(" "))
-      ? "$gcc"
-      : "$msCompile";
+  const matcher = "$gcc";
 
   const buildTask: Record<string, unknown> = {
     label: buildLabel,
@@ -865,31 +597,15 @@ function cleanupStaleSmileScripts(workspaceRoot: string, keepFiles: string[]): v
   }
 }
 
-function resolveCmakeTargetExe(
-  buildDir: string,
-  targetName: string,
-  config: string,
-  msvcStyle: boolean
-): string {
+function resolveCmakeTargetExe(buildDir: string, targetName: string): string {
   const exe = `${targetName}.exe`;
-  const candidates = msvcStyle
-    ? [
-        path.join(buildDir, config, exe),
-        path.join(buildDir, "bin", config, exe),
-        path.join(buildDir, config, targetName, exe),
-        path.join(buildDir, exe),
-        path.join(buildDir, "bin", exe),
-      ]
-    : [
-        path.join(buildDir, exe),
-        path.join(buildDir, "bin", exe),
-        path.join(buildDir, config, exe),
-        path.join(buildDir, "bin", config, exe),
-      ];
-  return (
-    resolveExistingFile(candidates) ||
-    (msvcStyle ? path.join(buildDir, config, exe) : path.join(buildDir, exe))
-  );
+  const candidates = [
+    path.join(buildDir, exe),
+    path.join(buildDir, "bin", exe),
+    path.join(buildDir, "Debug", exe),
+    path.join(buildDir, "Release", exe),
+  ];
+  return resolveExistingFile(candidates) || path.join(buildDir, exe);
 }
 
 function writeCmakeBuildScript(
@@ -897,49 +613,116 @@ function writeCmakeBuildScript(
   project: DiscoveredProject,
   projectDir: string,
   buildDir: string,
-  compiler: { kind: "gcc" | "clang" | "msvc"; command: string },
-  config: string,
-  platform: string
+  compiler: { kind: "gcc" | "clang"; command: string },
+  config: string
 ): string {
   const scriptPath = path.join(
     smileRoot(workspaceRoot),
     `build-${safeFileId(project.id)}.cmd`
   );
   const cmake = resolveCmake();
+  const ninja = resolveNinja();
+  const binDir = path.dirname(compiler.command);
+  const cc =
+    resolveExistingFile([
+      path.join(binDir, compiler.kind === "clang" ? "clang.exe" : "gcc.exe"),
+      path.join(binDir, compiler.kind === "clang" ? "clang" : "gcc"),
+    ]) || (compiler.kind === "clang" ? "clang" : "gcc");
+  const buildType = /release/i.test(config) ? "Release" : "Debug";
+  const generator = ninja ? "Ninja" : "MinGW Makefiles";
+  const pathPrefix = [ninja ? path.dirname(ninja) : "", binDir].filter(Boolean).join(";");
   const lines = [
     "@echo off",
     "chcp 65001 >nul",
     "setlocal",
     `cd /d ${qPath(projectDir)}`,
+    `set "PATH=${pathPrefix};%PATH%"`,
+    `${qPath(cmake)} -S ${qPath(projectDir)} -B ${qPath(buildDir)} -G ${q(generator)} -DCMAKE_BUILD_TYPE=${buildType} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_COMPILER=${qPath(compiler.command)} -DCMAKE_C_COMPILER=${qPath(cc)}`,
+    "if errorlevel 1 exit /b 1",
+    `${qPath(cmake)} --build ${qPath(buildDir)} --parallel`,
+    "exit /b %ERRORLEVEL%",
   ];
 
-  if (compiler.kind === "msvc") {
-    const arch = platform === "Win32" || /x86/i.test(platform) ? "Win32" : "x64";
-    const gen = resolveVsCmakeGenerator();
-    lines.push(
-      `${qPath(cmake)} -S ${qPath(projectDir)} -B ${qPath(buildDir)} -G ${q(gen)} -A ${arch}`,
-      "if errorlevel 1 exit /b 1",
-      `${qPath(cmake)} --build ${qPath(buildDir)} --config ${config} --parallel`,
-      "exit /b %ERRORLEVEL%"
-    );
-  } else {
-    const binDir = path.dirname(compiler.command);
-    const gcc =
-      resolveExistingFile([
-        path.join(binDir, "gcc.exe"),
-        path.join(binDir, "gcc"),
-        path.join(binDir, "clang.exe"),
-      ]) || "gcc";
-    const buildType = /release/i.test(config) ? "Release" : "Debug";
-    lines.push(
-      `set "PATH=${binDir};%PATH%"`,
-      `${qPath(cmake)} -S ${qPath(projectDir)} -B ${qPath(buildDir)} -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=${buildType} -DCMAKE_CXX_COMPILER=${qPath(compiler.command)} -DCMAKE_C_COMPILER=${q(gcc)}`,
-      "if errorlevel 1 exit /b 1",
-      `${qPath(cmake)} --build ${qPath(buildDir)} --parallel`,
-      "exit /b %ERRORLEVEL%"
-    );
-  }
+  ensureDir(scriptPath);
+  fs.writeFileSync(scriptPath, lines.join("\r\n") + "\r\n", "utf8");
+  return scriptPath;
+}
 
+function resolveGdb(compilerCommand: string): string {
+  return (
+    resolveExistingFile([
+      path.join(path.dirname(compilerCommand), "gdb.exe"),
+      path.join(path.dirname(compilerCommand), "gdb"),
+    ]) || "gdb"
+  );
+}
+
+function compileFlags(
+  config: string,
+  stdFlag: string,
+  includeDirs: string[],
+  defines: string[]
+): string[] {
+  const flags = [
+    "-fdiagnostics-color=always",
+    "-finput-charset=UTF-8",
+    "-fexec-charset=UTF-8",
+    "-Wall",
+    stdFlag,
+  ];
+  if (/release/i.test(config)) {
+    flags.push("-O2", "-DNDEBUG");
+  } else {
+    flags.push("-g", "-O0");
+  }
+  for (const dir of includeDirs) {
+    flags.push(`-I${dir}`);
+  }
+  for (const def of defines) {
+    if (def) {
+      flags.push(`-D${def}`);
+    }
+  }
+  return flags;
+}
+
+function writeStaticLibScript(
+  workspaceRoot: string,
+  project: DiscoveredProject,
+  projectDir: string,
+  outDir: string,
+  compiler: string,
+  flags: string[],
+  sources: string[],
+  targetFile: string
+): string {
+  const scriptPath = path.join(smileRoot(workspaceRoot), `build-${safeFileId(project.id)}.cmd`);
+  const ar =
+    resolveExistingFile([
+      path.join(path.dirname(compiler), "ar.exe"),
+      path.join(path.dirname(compiler), "ar"),
+    ]) || "ar";
+  const objects: string[] = [];
+  const lines = [
+    "@echo off",
+    "chcp 65001 >nul",
+    "setlocal",
+    `cd /d ${qPath(projectDir)}`,
+    `if not exist ${qPath(outDir)} mkdir ${qPath(outDir)}`,
+  ];
+  sources.forEach((source, index) => {
+    const obj = path.join(outDir, `${index}_${path.basename(source)}.o`);
+    objects.push(obj);
+    const flagStr = flags.map(qArg).join(" ");
+    lines.push(
+      `${qPath(compiler)} -c ${flagStr} -o ${qPath(obj)} ${qPath(source)}`,
+      "if errorlevel 1 exit /b 1"
+    );
+  });
+  lines.push(
+    `${qPath(ar)} rcs ${qPath(targetFile)} ${objects.map(qPath).join(" ")}`,
+    "exit /b %ERRORLEVEL%"
+  );
   ensureDir(scriptPath);
   fs.writeFileSync(scriptPath, lines.join("\r\n") + "\r\n", "utf8");
   return scriptPath;
@@ -950,67 +733,41 @@ export function syncVsCodeBuildFromProject(
   project: DiscoveredProject,
   props: ProjectProperties
 ): string {
-  const projectDir =
-    project.kind === "vcxproj"
-      ? path.dirname(project.path)
-      : project.kind === "cmake"
-        ? project.path
-        : workspaceRoot;
-  const solutionDir =
-    project.kind === "vcxproj"
-      ? resolveSolutionDir(projectDir, workspaceRoot)
-      : workspaceRoot;
+  const projectDir = project.kind === "cmake" ? project.path : workspaceRoot;
   const projectName = project.name;
   const config = props.configuration.config;
-  const platform = props.configuration.platform;
 
   const macroCtxBase = {
     projectDir,
-    solutionDir,
+    solutionDir: projectDir,
     projectName,
     config,
-    platform,
+    platform: "x64",
     outDir: "",
     targetFile: "",
   };
 
-  // 默认：CMake 用 build；其余用工程目录。最终都以「输出目录」设置为准。
-  const defaultOut =
-    project.kind === "cmake"
-      ? path.join(projectDir, "build") + path.sep
-      : projectDir + path.sep;
-  const outDirRaw = expandMacros(props.general.outputDirectory || defaultOut, {
+  const defaultOut = path.join(projectDir, "build") + path.sep;
+  const outDirRaw = expandMacros(props.general.outputDirectory || "build", {
     ...macroCtxBase,
     outDir: defaultOut,
     targetFile: "",
   });
   const outDir = resolveUnder(projectDir, outDirRaw);
-  const cmakeBuildDir = outDir;
-  const ext = props.advanced.targetFileExtension || ".exe";
   let targetName = expandMacros(props.general.targetFileName || projectName, {
     ...macroCtxBase,
     outDir: outDir + path.sep,
     targetFile: "",
   }).trim();
-  // 若目标名被写成路径，只取文件名，避免拼出错误 exe 路径
   targetName = path.basename(targetName.replace(/\\/g, "/"));
   if (!targetName) {
     targetName = projectName;
   }
-  const targetExt = ext.startsWith(".") ? ext : `.${ext}`;
-  if (/\.(exe|dll|lib)$/i.test(targetName)) {
-    targetName = targetName.replace(/\.(exe|dll|lib)$/i, "");
-  }
-  let targetFile = path.join(outDir, `${targetName}${targetExt}`);
+  targetName = targetName.replace(/\.(exe|dll|lib|a)$/i, "");
+  const kind = targetKind(props.general.configurationType);
+  let targetFile = path.join(outDir, `${targetName}${targetExtension(props.general.configurationType)}`);
 
   const ctx = { ...macroCtxBase, outDir: outDir + path.sep, targetFile };
-
-  const intDirRaw = expandMacros(
-    props.general.intermediateDirectory ||
-      "$(SolutionDir)$(Platform)\\$(Configuration)\\$(Configuration)Info\\",
-    ctx
-  );
-  const intDir = resolveUnder(projectDir, intDirRaw);
 
   const resolveDebugPath = (value: string, fallback: string): string => {
     const raw = (value || "").trim() || fallback;
@@ -1023,337 +780,109 @@ export function syncVsCodeBuildFromProject(
       : path.resolve(projectDir, expanded);
   };
 
-  const debugProgram = resolveDebugPath(props.debug.command, "$(TargetPath)");
   const debugCwd = resolveDebugPath(props.debug.workingDirectory, "$(ProjectDir)");
 
   const resolveFromProject = (value: string): string => {
     const expanded = expandMacros(value, ctx);
-    return path.isAbsolute(expanded)
-      ? path.normalize(expanded)
-      : path.resolve(projectDir, expanded);
+    return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(projectDir, expanded);
   };
 
   const includeDirs = splitList(props.cpp.additionalIncludeDirectories).map(resolveFromProject);
   if (!includeDirs.includes(projectDir)) {
     includeDirs.unshift(projectDir);
   }
-
   const libDirs = splitList(props.cpp.additionalLibraryDirectories).map(resolveFromProject);
   const defines = splitList(props.cpp.preprocessorDefinitions);
   const deps = splitList(props.cpp.additionalDependencies);
 
   const compiler = resolveCompiler(props);
   const stdFlag = toStdFlag(props.general.languageStandard);
+  const toolchain = compiler.kind === "clang" ? "Clang" : "GCC";
+  const gdb = resolveGdb(compiler.command);
 
-  // CMake：configure + build（MSVC 用 VS 生成器，MinGW64 用 MinGW Makefiles）
-  // -B / 产物查找目录 = 展开后的「输出目录」
   if (project.kind === "cmake") {
-    const msvcStyle = compiler.kind === "msvc";
-    targetFile = resolveCmakeTargetExe(cmakeBuildDir, targetName, config, msvcStyle);
-    const cmakeDebugProgram = resolveDebugPath(props.debug.command, "$(TargetPath)");
-    // resolveDebugPath 闭包仍用旧 targetFile；若用户未改 command，强制用 cmake 输出
-    const program =
-      !(props.debug.command || "").trim() ||
-      (props.debug.command || "").trim() === "$(TargetPath)"
-        ? targetFile
-        : cmakeDebugProgram;
-    const cwd =
-      !(props.debug.workingDirectory || "").trim() ||
-      (props.debug.workingDirectory || "").trim() === "$(ProjectDir)"
-        ? projectDir
-        : resolveDebugPath(props.debug.workingDirectory, "$(ProjectDir)");
-
+    targetFile = resolveCmakeTargetExe(outDir, targetName);
+    const program = (props.debug.command || "").trim() ? resolveDebugPath(props.debug.command, "$(TargetPath)") : targetFile;
+    const cwd = (props.debug.workingDirectory || "").trim()
+      ? resolveDebugPath(props.debug.workingDirectory, "$(ProjectDir)")
+      : projectDir;
     const buildScript = writeCmakeBuildScript(
       workspaceRoot,
       project,
       projectDir,
-      cmakeBuildDir,
+      outDir,
       compiler,
-      config,
-      platform
+      config
     );
     updateTasksJson(workspaceRoot, project, [], buildScript, projectDir, program);
-    updateLaunchJson(
-      workspaceRoot,
-      project,
-      props,
-      program,
-      cwd,
-      msvcStyle ? "cppvsdbg" : "cppdbg",
-      msvcStyle
-        ? undefined
-        : resolveExistingFile([
-            path.join(path.dirname(compiler.command), "gdb.exe"),
-            path.join(path.dirname(compiler.command), "gdb"),
-          ]) || "gdb"
-    );
-    const runScript = writeRunScript(
-      workspaceRoot,
-      project,
-      buildScript,
-      [],
-      program,
-      cwd
-    );
+    updateLaunchJson(workspaceRoot, project, props, program, cwd, gdb);
+    const runScript = writeRunScript(workspaceRoot, project, buildScript, [], program, cwd);
     updateCodeRunnerSettings(workspaceRoot, project, runScript, projectDir);
     updateCppProperties(
       workspaceRoot,
       project,
-      props,
       includeDirs,
       defines,
-      msvcStyle ? resolveClExe() || "" : compiler.command,
-      stdFlag
+      compiler.command,
+      stdFlag,
+      path.join(outDir, "compile_commands.json")
     );
-    cleanupStaleSmileScripts(workspaceRoot, [
-      path.basename(buildScript),
-      path.basename(runScript),
-    ]);
-    return `已同步 VS Code 构建/调试/运行: ${TASK_PREFIX}${project.name}（CMake / ${msvcStyle ? "MSVC" : "MinGW64"}）`;
+    cleanupStaleSmileScripts(workspaceRoot, [path.basename(buildScript), path.basename(runScript)]);
+    return `已同步构建与调试: ${TASK_PREFIX}${project.name}（CMake / ${toolchain}）`;
   }
 
-  // MSVC：用 MSBuild；MinGW64：用 g++（含 .vcxproj）
-  // 显式传入 SolutionDir/OutDir/IntDir，与侧栏「输出/中间目录」及调试路径一致
-  if (project.kind === "vcxproj" && compiler.kind === "msvc") {
-    const msbuild = resolveMsbuild();
-    const args = [
-      project.path,
-      `/p:Configuration=${config}`,
-      `/p:Platform=${platform === "Win32" ? "Win32" : platform}`,
-      msbuildDirProp("SolutionDir", solutionDir),
-      msbuildDirProp("OutDir", outDir),
-      msbuildDirProp("IntDir", intDir),
-    ];
-    updateTasksJson(workspaceRoot, project, args, msbuild, projectDir, debugProgram);
-    updateLaunchJson(
-      workspaceRoot,
-      project,
-      props,
-      debugProgram,
-      debugCwd,
-      "cppvsdbg"
-    );
-    const runScript = writeRunScript(
-      workspaceRoot,
-      project,
-      msbuild,
-      args,
-      debugProgram,
-      debugCwd
-    );
-    updateCodeRunnerSettings(workspaceRoot, project, runScript, projectDir);
-    updateCppProperties(
-      workspaceRoot,
-      project,
-      props,
-      includeDirs,
-      defines,
-      "",
-      stdFlag
-    );
-    cleanupStaleSmileScripts(workspaceRoot, [path.basename(runScript)]);
-    return `已同步 VS Code 构建/调试/运行: ${TASK_PREFIX}${project.name}（MSVC / MSBuild）`;
+  const sources = collectFolderSources(projectDir);
+  if (!sources.length) {
+    updateCppProperties(workspaceRoot, project, includeDirs, defines, compiler.command, stdFlag);
+    return `已保存设置。${projectDir} 里还没有 .cpp / .c，放入源文件后再次保存即可构建。`;
   }
 
-  // 无 .vcxproj 的文件夹工程：MSVC 用 vcvars + cl.exe
-  if (compiler.kind === "msvc") {
-    const vcvars = resolveVcvars(platform);
-    if (!vcvars) {
-      throw new Error(
-        "未找到 vcvars64.bat / Visual Studio C++ 工具集。请安装「使用 C++ 的桌面开发」，或改用 MinGW64。"
-      );
-    }
+  const flags = compileFlags(config, stdFlag, includeDirs, defines);
+  ensureDir(path.join(outDir, "dummy"));
 
-    let sources = collectFolderSources(projectDir);
-    if (!sources.length) {
-      throw new Error(`在 ${projectDir} 下未找到 .cpp/.c 源文件`);
+  let buildCommand = compiler.command;
+  let buildArgs: string[] = [];
+  if (kind === "static") {
+    buildCommand = writeStaticLibScript(
+      workspaceRoot,
+      project,
+      projectDir,
+      outDir,
+      compiler.command,
+      flags,
+      sources,
+      targetFile
+    );
+  } else {
+    buildArgs = [...flags];
+    if (kind === "shared") {
+      buildArgs.push("-shared");
     }
-
-    const intDirSlash = intDir.endsWith("\\") || intDir.endsWith("/") ? intDir : intDir + "\\";
-
-    const isDebug = /debug/i.test(config);
-    const clParts: string[] = [
-      "cl",
-      "/nologo",
-      "/EHsc",
-      "/W3",
-      "/utf-8",
-      toStdFlagMsvc(props.general.languageStandard),
-    ];
-    if (isDebug) {
-      clParts.push("/Zi", "/Od", "/MDd");
-    } else {
-      clParts.push("/O2", "/MD");
-    }
-    for (const d of includeDirs) {
-      clParts.push(`/I${qPath(d)}`);
-    }
-    for (const d of defines) {
-      if (d) {
-        clParts.push(`/D${d}`);
-      }
-    }
-    clParts.push(`/Fo${qPath(intDirSlash)}`);
-    clParts.push(`/Fe${qPath(targetFile)}`);
-    for (const s of sources) {
-      clParts.push(qPath(s));
-    }
-
-    const linkParts: string[] = [];
-    for (const d of libDirs) {
-      linkParts.push(`/LIBPATH:${qPath(d)}`);
+    buildArgs.push(...sources);
+    for (const dir of libDirs) {
+      buildArgs.push(`-L${dir}`);
     }
     for (const lib of deps) {
-      const base = path.basename(lib);
-      if (base && !base.startsWith("%(")) {
-        linkParts.push(base.endsWith(".lib") ? base : `${base}.lib`);
+      const flag = libNameToLinkFlag(lib);
+      if (flag) {
+        buildArgs.push(flag);
       }
     }
-    if (linkParts.length) {
-      clParts.push("/link", ...linkParts);
-    }
-
-    ensureDir(targetFile);
-    ensureDir(path.join(intDirSlash, "dummy"));
-
-    const buildScript = path.join(
-      smileRoot(workspaceRoot),
-      `build-${safeFileId(project.id)}.cmd`
-    );
-    const buildLines = [
-      "@echo off",
-      "chcp 65001 >nul",
-      "setlocal",
-      `cd /d ${qPath(projectDir)}`,
-      `call ${qPath(vcvars)}`,
-      "if errorlevel 1 exit /b 1",
-      `if not exist ${qPath(outDir)} mkdir ${qPath(outDir)}`,
-      `if not exist ${qPath(intDir)} mkdir ${qPath(intDir)}`,
-      clParts.join(" "),
-      "exit /b %ERRORLEVEL%",
-    ];
-    ensureDir(buildScript);
-    fs.writeFileSync(buildScript, buildLines.join("\r\n") + "\r\n", "utf8");
-
-    updateTasksJson(workspaceRoot, project, [], buildScript, projectDir, debugProgram);
-    updateLaunchJson(
-      workspaceRoot,
-      project,
-      props,
-      debugProgram,
-      debugCwd,
-      "cppvsdbg"
-    );
-    const runScript = writeRunScript(
-      workspaceRoot,
-      project,
-      buildScript,
-      [],
-      debugProgram,
-      debugCwd
-    );
-    updateCodeRunnerSettings(workspaceRoot, project, runScript, projectDir);
-    updateCppProperties(
-      workspaceRoot,
-      project,
-      props,
-      includeDirs,
-      defines,
-      resolveClExe() || "",
-      toStdFlag(props.general.languageStandard)
-    );
-    cleanupStaleSmileScripts(workspaceRoot, [
-      path.basename(buildScript),
-      path.basename(runScript),
-    ]);
-    return `已同步 VS Code 构建/调试/运行: ${TASK_PREFIX}${project.name}（MSVC / cl.exe）`;
+    buildArgs.push("-o", targetFile);
   }
 
-  let sources =
-    project.kind === "vcxproj" ? collectVcxprojSources(project.path) : [];
-  if (!sources.length) {
-    sources = collectFolderSources(projectDir);
-  }
-  sources = maybeAddGladSource(projectDir, includeDirs, sources);
-
-  const args: string[] = [
-    "-fdiagnostics-color=always",
-    "-g",
-    "-finput-charset=UTF-8",
-    "-fexec-charset=UTF-8",
-    stdFlag,
-  ];
-  for (const d of includeDirs) {
-    args.push(`-I${d}`);
-  }
-  for (const d of defines) {
-    args.push(`-D${d}`);
-  }
-  for (const s of sources) {
-    args.push(s);
-  }
-  for (const d of libDirs) {
-    args.push(`-L${d}`);
-  }
-  for (const lib of deps) {
-    if (/glad\.lib$/i.test(lib) && sources.some((s) => /gl\.c$/i.test(s))) {
-      continue;
-    }
-    const flag = libNameToLinkFlag(lib);
-    if (flag) {
-      args.push(flag);
-    }
-  }
-  if (deps.some((d) => /opengl32/i.test(d)) || sources.some((s) => /glad/i.test(s))) {
-    if (!args.includes("-lopengl32")) {
-      args.push("-lopengl32");
-    }
-    if (!args.includes("-lgdi32")) {
-      args.push("-lgdi32");
-    }
-  }
-
-  ensureDir(targetFile);
-  args.push("-o", targetFile);
-
-  updateTasksJson(workspaceRoot, project, args, compiler.command, projectDir, debugProgram);
-
-  const gdb =
-    resolveExistingFile([
-      path.join(path.dirname(compiler.command), "gdb.exe"),
-      path.join(path.dirname(compiler.command), "gdb"),
-      "E:\\software\\mingw64\\bin\\gdb.exe",
-    ]) || "gdb";
-  updateLaunchJson(
-    workspaceRoot,
-    project,
-    props,
-    debugProgram,
-    debugCwd,
-    "cppdbg",
-    gdb
-  );
-
-  const runScript = writeRunScript(
-    workspaceRoot,
-    project,
-    compiler.command,
-    args,
-    debugProgram,
-    debugCwd
-  );
+  const program = (props.debug.command || "").trim()
+    ? resolveDebugPath(props.debug.command, "$(TargetPath)")
+    : targetFile;
+  updateTasksJson(workspaceRoot, project, buildArgs, buildCommand, projectDir, program);
+  updateLaunchJson(workspaceRoot, project, props, program, debugCwd, gdb);
+  const runScript = writeRunScript(workspaceRoot, project, buildCommand, buildArgs, program, debugCwd);
   updateCodeRunnerSettings(workspaceRoot, project, runScript, projectDir);
-
-  updateCppProperties(
-    workspaceRoot,
-    project,
-    props,
-    includeDirs,
-    defines,
-    compiler.command,
-    stdFlag
-  );
-
-  cleanupStaleSmileScripts(workspaceRoot, [path.basename(runScript)]);
-  return `已同步 VS Code 构建/调试/运行（${TASK_PREFIX}${project.name}，含 Code Runner）`;
+  updateCppProperties(workspaceRoot, project, includeDirs, defines, compiler.command, stdFlag);
+  cleanupStaleSmileScripts(workspaceRoot, [
+    path.basename(runScript),
+    ...(kind === "static" ? [path.basename(buildCommand)] : []),
+  ]);
+  const product = kind === "static" ? "静态库" : kind === "shared" ? "动态库" : "可执行文件";
+  return `已同步构建与调试: ${TASK_PREFIX}${project.name}（${toolchain} / ${product}）`;
 }
